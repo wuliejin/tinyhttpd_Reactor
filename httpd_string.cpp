@@ -20,11 +20,13 @@
 
 using namespace std;
 
+char port[10] = "51213";
+const int WORKER_THREAD_NUM = 6;
+
 const int STDIN = 0;
 const int STDOUT = 1;
 const int STDERR = 2;
 const string SERVER_STRING = "Server: wlj's httpd/0.1.0\r\n";
-const int WORKER_THREAD_NUM = 12;
 const int MAX_EPOLL_EVENT = 3072;
 
 int epollfd = 0;
@@ -551,7 +553,8 @@ void* worker_thread(void* arg)
 
 int main(int argv, char *argc[])
 {
-    char port[] = "51213";
+    if (argv == 2)
+        strcpy(port, argc[1]);
 
     // 信号处理
     signal(SIGPIPE, SIG_IGN);
@@ -592,6 +595,12 @@ int main(int argv, char *argc[])
                 pthread_cond_signal(&client_cond);
             }
         }
+        
+        // sockaddr_in sa;
+        // socklen_t sl = sizeof(sa);
+        // int client_socket = accept(listenfd, (sockaddr *)&sa, &sl);
+        // accept_request(client_socket);
+        // close(client_socket);
     }
 
     return 0;
