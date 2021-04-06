@@ -4,7 +4,7 @@
  * @Author: wuliejin
  * @Date: 2021-04-07 00:31:58
  * @LastEditors: wuliejin
- * @LastEditTime: 2021-04-07 00:32:18
+ * @LastEditTime: 2021-04-07 00:49:33
 -->
 # tinyhttpd_Reactor
 基于tinyhttpd实现的项目，加入了基于Reactor模型实现的IO复用
@@ -24,7 +24,12 @@ make
 ./httpd_string
 '''
 
-# 
+# 程序输入
+可使用
+'''
+./httpd_string [port]
+'''
+进行端口自定义，目前未设置错误检测
 
 # 不足
-epoll这一设计
+epoll在有大量描述符需要轮询，并且都是长连接的前提下才能够体现更大的优势，这一http服务器的实现目前只有短连接，并不能发挥epoll的最大优势
