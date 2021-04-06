@@ -1,0 +1,2 @@
+# tinyhttpd_Reactor
+基于tinyhttpd实现的项目，加入了基于Reactor模型实现的IO复用
