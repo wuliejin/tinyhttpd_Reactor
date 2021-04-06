@@ -220,9 +220,13 @@ void execute_cgi(int client, string& path, string& method, string& query_string)
         while (!buf.empty())
         {
             if (buf.find("Content-Length:") != string::npos)
+            {
                 content_length = stoi(buf.substr(15));
+                cout << buf << endl;
+            }
             get_line(client, buf);
         }
+        cout << buf << endl;
         if (content_length == -1)
         {
             bad_request(client);
@@ -252,7 +256,9 @@ void execute_cgi(int client, string& path, string& method, string& query_string)
     // 子进程
     if (pid == 0)
     {
-        
+        char meth_env[255];
+		char query_env[255];
+		char length_env[255];
 
         // 由于 CGI 程序的输入输出是使用标准输入输出流的，所以需要重定向到与客户端相关联的已连接描述符
         // 将标准输入输出流进行重定向
@@ -264,19 +270,21 @@ void execute_cgi(int client, string& path, string& method, string& query_string)
         // 关闭输入管道的写入端
         close(cgi_input[1]);
         // 设定相关的环境变量
-        method = "REQUEST_METHOD=" + method;
-        putenv(const_cast<char*>(method.c_str()));
+        cout << method << endl;
         if (method == "GET") {
-            query_string = "QUERY_STRING=" + query_string;
-            putenv(const_cast<char*>(query_string.c_str()));
+            sprintf(query_env, "QUERY_STRING=%s", query_string.c_str());
+			putenv(query_env);
         }
         else {
-            string length_env = "CONTENT_LENGTH=" + to_string(content_length);
-            putenv(const_cast<char*>(length_env.c_str()));
+            sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
+			putenv(length_env);
         }
+        sprintf(meth_env, "REQUEST_METHOD=%s", method.c_str());
+		putenv(meth_env);
+        
         // 执行 CGI 程序
         char *emptylist[] = {nullptr};
-        execve(path.c_str(), emptylist, environ);
+        execve(path.c_str(), emptylist, environ);        
         exit(0);
     }
     // 父进程
