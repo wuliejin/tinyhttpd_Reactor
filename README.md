@@ -33,3 +33,9 @@ make
 
 # 不足
 epoll在有大量描述符需要轮询，并且都是长连接的前提下才能够体现更大的优势，这一http服务器的实现目前只有短连接，并不能发挥epoll的最大优势
+
+# 压力测试结果
+单线程模式
+![image](https://github.com/wuliejin/tinyhttpd_Reactor/blob/main/images/without_reactor.png)
+多线程模式
+![image](https://github.com/wuliejin/tinyhttpd_Reactor/blob/main/images/with_reactor.png)
