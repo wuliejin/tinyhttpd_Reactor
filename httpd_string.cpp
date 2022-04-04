@@ -35,11 +35,15 @@ pthread_t accept_thread_id;
 pthread_t worker_thread_id[WORKER_THREAD_NUM];
 pthread_cond_t accept_cond;
 pthread_mutex_t accept_mutex;
+bool running = true;
 
 pthread_mutex_t client_mutex;
 pthread_cond_t client_cond;
 list<int> clients;
 
+bool startup(const char* port);
+
+// http处理
 void *accept_request(int client);
 void bad_request(int client);
 void cat(int client, ifstream& resourse);
@@ -50,10 +54,17 @@ int get_line(int client, string& buf);
 void headers(int client, const string& filename);
 void not_found(int client);
 void serve_file(int client, string& filename);
-bool startup(const char* port);
 void unimplemented(int client);
 void clear_buffer(int client);
 void send_data(int client, const string& buf);
+int set_nonblock(int fd);
+void release_client(int client);
+
+// 线程处理
+void cleanup(void *arg);
+void* accept_thread(void *arg);
+void* worker_thread(void* arg);
+void end_process(int arg);
 
 /**
  * 处理来自客户端的请求
@@ -155,11 +166,12 @@ void bad_request(int client)
 void cat(int client, ifstream &resourse)
 {
     // cout << "Entering cat" << endl;
-    char buf[128];
+    string str;
+    str.reserve(128);
     while (!resourse.eof())
     {
-        resourse.getline(buf, sizeof(buf));
-        send(client, buf, strlen(buf), 0);
+        getline(resourse, str);
+        send_data(client, str);
     }
 }
 
@@ -511,9 +523,28 @@ void release_client(int client)
     close(client);
 }
 
+/**
+ * 结束服务器时，需将线程所持有的互斥锁解开，否则会造成死锁
+ * @param {void *} arg
+ * @return {void}
+ */
+void cleanup(void *arg) 
+{
+    if((long long)(arg) == 0)
+        pthread_mutex_unlock(&accept_mutex);
+    else
+        pthread_mutex_unlock(&client_mutex);
+}
+
+/**
+ * 连接处理线程，负责调用accept获得与对端通信的fd
+ * @param {void *} arg
+ * @return {void *}
+ */
 void* accept_thread(void *arg)
 {
-    while (1)
+    pthread_cleanup_push(cleanup, (void *)0);
+    while (running)
     {
         pthread_mutex_lock(&accept_mutex);
         pthread_cond_wait(&accept_cond, &accept_mutex);
@@ -530,12 +561,19 @@ void* accept_thread(void *arg)
         ev.data.fd = clientfd;
         epoll_ctl(epollfd, EPOLL_CTL_ADD, clientfd, &ev);
     }
+    pthread_cleanup_pop(0);
     return nullptr;
 }
 
+/**
+ * 业务处理线程，负责http请求报文的解析，并生成http响应报文
+ * @param {void *} arg
+ * @return {void *}
+ */
 void* worker_thread(void* arg)
 {
-    while (1)
+    pthread_cleanup_push(cleanup, (void *)1);
+    while (running)
     {
         pthread_mutex_lock(&client_mutex);
         while (clients.empty())
@@ -548,7 +586,44 @@ void* worker_thread(void* arg)
         // cout << "accept: " << clientfd << endl;
         release_client(clientfd);
     }
+    pthread_cleanup_pop(0);
     return nullptr;
+}
+
+/**
+ * 结束服务器后，所需的善后工作，在接受到SIGINT信号后触发
+ * @param {int} arg
+ * @return {void}
+ */
+void end_process(int arg) 
+{
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+    running = false;
+
+    pthread_cancel(accept_thread_id);
+    for(int i=0; i < WORKER_THREAD_NUM; i++) {
+        pthread_cancel(worker_thread_id[i]);
+    }
+
+    pthread_join(accept_thread_id, nullptr);
+    for(int i=0; i < WORKER_THREAD_NUM; i++) {
+        pthread_join(worker_thread_id[i], nullptr);
+    }
+
+    epoll_ctl(epollfd, EPOLL_CTL_DEL, listenfd, nullptr);
+    shutdown(listenfd, SHUT_RDWR);
+    close(listenfd);
+    close(epollfd);
+
+    pthread_cond_destroy(&accept_cond);
+    pthread_cond_destroy(&client_cond);
+
+    pthread_mutex_destroy(&accept_mutex);
+    pthread_mutex_destroy(&client_mutex);
+
+    cout << "Server Closed" << endl;
+    exit(0);
 }
 
 int main(int argv, char *argc[])
@@ -558,18 +633,16 @@ int main(int argv, char *argc[])
 
     // 信号处理
     signal(SIGPIPE, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN);    
+    signal(SIGCHLD, SIG_IGN);
+    signal(SIGINT, end_process);
+    signal(SIGTERM, end_process);
     
-    // 信号量、互斥锁初始化
+    // 线程池初始化
     pthread_cond_init(&accept_cond, nullptr);
     pthread_cond_init(&client_cond, nullptr);
 
     pthread_mutex_init(&accept_mutex, nullptr);
     pthread_mutex_init(&client_mutex, nullptr);
-
-    // socket、epoll初始化
-    startup(port);
-    cout << "httpd running on port " << port << endl;
 
     pthread_create(&accept_thread_id, nullptr, accept_thread, nullptr);
     for (int i=0; i<WORKER_THREAD_NUM; i++)
@@ -577,11 +650,17 @@ int main(int argv, char *argc[])
         pthread_create(&worker_thread_id[i], nullptr, worker_thread, nullptr);
     }
 
-    while (1)
+    // socket、epoll初始化
+    startup(port);
+
+    cout << "httpd running on port " << port << endl;
+
+    while (running)
     {
         epoll_event ev[MAX_EPOLL_EVENT];
         int n = epoll_wait(epollfd, ev, MAX_EPOLL_EVENT, 10);
         n = min(n, MAX_EPOLL_EVENT);
+        if(!running) break;
         for (int i=0; i<n; i++)
         {
             if (ev[i].data.fd == listenfd)
@@ -599,6 +678,8 @@ int main(int argv, char *argc[])
         // sockaddr_in sa;
         // socklen_t sl = sizeof(sa);
         // int client_socket = accept(listenfd, (sockaddr *)&sa, &sl);
+        // pthread_t pt;
+        // pthread_create(&pt, nullptr, shitty_thread, reinterpret_cast<void*>(client_socket));
         // accept_request(client_socket);
         // close(client_socket);
     }
